@@ -21,7 +21,6 @@ export async function action({ request }: Route.ActionArgs) {
   // 2. Process mutations sequentially
   for (const mutation of mutations) {
     const { id, name, args } = mutation;
-
     // Deduplication: If this mutation has already been processed by the server, skip it.
     // This is crucial for idempotence and robustness.
     if (id <= lastMutationID) {
@@ -68,7 +67,7 @@ export async function action({ request }: Route.ActionArgs) {
               where: { id: args.id },
               data: {
                 stock: currentProduct.stock + args.stockChange,
-                version: currentProduct.version + 1, // Always increment version on update
+                version: currentProduct.version + 1, 
               },
             });
             console.log(
@@ -77,19 +76,10 @@ export async function action({ request }: Route.ActionArgs) {
               }. New stock: ${currentProduct.stock + args.stockChange}`
             );
             break;
-
-          // Add more mutation cases as your POS needs (e.g., 'deleteProduct', 'processSale')
           default:
             console.warn(`Client ${clientID}: Unknown mutation: ${name}`);
         }
-
-        // After successfully applying the mutation, update client's last_mutation_id in the database
-        // This ensures that if the server crashes, it knows which mutations have been applied.
-        await tx.replicacheClient.update({
-          where: { id: clientID },
-          data: { last_mutation_id: id },
-        });
-        nextMutationID = id;
+        nextMutationID = id
       });
     } catch (e) {
       console.error(
@@ -103,7 +93,7 @@ export async function action({ request }: Route.ActionArgs) {
     }
   }
 
-  // Final update of the client's lastMutationID in case of partial success or early exit
+
   if (nextMutationID > lastMutationID) {
     await prisma.replicacheClient.update({
       where: { id: clientID },

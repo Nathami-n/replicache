@@ -8,7 +8,11 @@ export async function action({ request }: Route.ActionArgs) {
     where: { id: clientID },
   });
 
-  
+  if (!client) {
+    client = await prisma.replicacheClient.create({
+      data: { id: clientID },
+    });
+  }
 
   const lastMutationID = client.last_mutation_id;
 
@@ -23,7 +27,13 @@ export async function action({ request }: Route.ActionArgs) {
     ...products.map((p) => ({
       op: "put",
       key: `product/${p.id}`,
-      value: p,
+      value: {
+        id: p.id,
+        name: p.name,
+        price: p.price,
+        stock: p.stock,
+        version: p.version,
+      },
     })),
   ];
 
@@ -33,9 +43,5 @@ export async function action({ request }: Route.ActionArgs) {
     patch: patch,
   };
 
-  console.log(
-    `Pull for client ${clientID}: lastMutationID=${lastMutationID}, sending ${products.length} products`
-  );
-  return response;
+  return Response.json(response);
 }
-

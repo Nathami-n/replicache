@@ -1,5 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
-import { Replicache } from "replicache";
+import {
+  Replicache,
+  type ReadTransaction,
+  type WriteTransaction,
+} from "replicache";
 import { useSubscribe } from "replicache-react";
 import { nanoid } from "nanoid";
 import type { MetaFunction } from "react-router";
@@ -24,57 +28,88 @@ type Product = {
 
 export default function Home() {
   const [clientId, setClientId] = useState<string | null>(null);
+  const [isLoadingReplicache, setIsLoadingReplicache] = useState(true)
+
+  console.log("Client ID state:", clientId);
 
   useEffect(() => {
     let id = localStorage.getItem(CLIENT_ID_KEY);
     if (!id) {
       id = nanoid();
       localStorage.setItem(CLIENT_ID_KEY, id);
+      console.log("Generated new client ID:", id);
+    } else {
+      console.log("Found existing client ID:", id);
     }
     setClientId(id);
+    // Set loading to false only after clientId is set, allowing Replicache to initialize
+    setIsLoadingReplicache(false);
   }, []);
 
   const rep = useMemo(
-    () =>
-      clientId
-        ? new Replicache({
-            name: clientId,
-            pullURL: "/api/replicache/pull",
-            pushURL: "/api/replicache/push",
-            mutators: {
-              async createProduct(tx, { id, name, price, stock, version }) {
-                await tx.set(`product/${id}`, {
-                  id,
-                  name,
-                  price,
-                  stock,
-                  version,
-                });
-              },
-              async updateProductStock(tx, { id, stockChange }) {
-                const product = await tx.get(`product/${id}`);
-                if (product) {
-                  await tx.set(`product/${id}`, {
-                    ...product,
-                    stock: (product.stock || 0) + stockChange,
-                    version: (product.version || 1) + 1,
-                  });
-                }
-              },
-            },
-            licenseKey: "test",
-          })
-        : undefined,
-    [clientId]
+    () => {
+      if (!clientId) {
+        console.log("Replicache not initializing yet, clientId is null.");
+        return undefined;
+      }
+      console.log("Initializing Replicache with name:", clientId);
+      const replicacheInstance = new Replicache({
+        name: clientId,
+        pullURL: "/api/replicache/pull",
+        pushURL: "/api/replicache/push",
+        mutators: {
+          async createProduct(
+            tx: WriteTransaction,
+            { id, name, price, stock, version }
+          ) {
+            console.log("Mutator: createProduct called with:", { id, name, price, stock, version });
+            await tx.set(`product/${id}`, {
+              id,
+              name,
+              price,
+              stock,
+              version,
+            });
+            console.log(`Mutator: Product ${name} set in Replicache local state.`);
+          },
+          async updateProductStock(
+            tx: WriteTransaction,
+            { id, stockChange }
+          ) {
+            console.log("Mutator: updateProductStock called with:", { id, stockChange });
+            const product = await tx.get(`product/${id}`);
+            if (product) {
+              const newStock = (product.stock || 0) + stockChange;
+              const newVersion = (product.version || 1) + 1;
+              await tx.set(`product/${id}`, {
+                ...product,
+                stock: newStock,
+                version: newVersion,
+              });
+              console.log(`Mutator: Product ${product.name} stock updated to ${newStock} (v${newVersion})`);
+            } else {
+              console.warn(`Mutator: Product with ID ${id} not found for stock update.`);
+            }
+          },
+        },
+        licenseKey: "test",
+      });
+
+
+      return replicacheInstance;
+    },
+    [clientId, isLoadingReplicache] 
   );
 
   const products = useSubscribe(
-    rep!,
+    rep,
     async (tx) => {
+      console.log("useSubscribe: Fetching products from Replicache local state...");
       const list: Product[] = [];
-      for await (const [, value] of tx.scan({ prefix: "product/" })) {
+      for await (const [, value] of tx.scan({ prefix: "product/" }).entries()) {
         list.push(value as Product);
       }
+      console.log("useSubscribe: Found products in local state:", list.length);
       return list.sort((a, b) => a.name.localeCompare(b.name));
     },
     [rep]
@@ -86,12 +121,17 @@ export default function Home() {
 
   const handleAddProduct = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!rep) return;
+    if (!rep) {
+      console.warn("handleAddProduct: Replicache instance not ready.");
+      return;
+    }
     if (!newProductName || !newProductPrice || !newProductStock) {
-      alert("Please fill all fields for the new product.");
+      // Replaced alert with console.error for better debugging in Canvas
+      console.error("Please fill all fields for the new product.");
       return;
     }
     const id = nanoid();
+    console.log("handleAddProduct: Calling createProduct mutator...");
     await rep.mutate.createProduct({
       id,
       name: newProductName,
@@ -102,21 +142,43 @@ export default function Home() {
     setNewProductName("");
     setNewProductPrice("");
     setNewProductStock("");
+    console.log("handleAddProduct: createProduct mutator called successfully.");
   };
 
   const handleSellProduct = async (productId: string, currentStock: number) => {
-    if (!rep) return;
-    if (currentStock <= 0) {
-      alert("Cannot sell, stock is zero!");
+    if (!rep) {
+      console.warn("handleSellProduct: Replicache instance not ready.");
       return;
     }
+    if (currentStock <= 0) {
+      console.warn("Cannot sell, stock is zero!");
+      return;
+    }
+    console.log("handleSellProduct: Calling updateProductStock mutator (sell)...");
     await rep.mutate.updateProductStock({ id: productId, stockChange: -1 });
+    console.log("handleSellProduct: updateProductStock (sell) mutator called successfully.");
   };
 
   const handleRestockProduct = async (productId: string) => {
-    if (!rep) return;
+    if (!rep) {
+      console.warn("handleRestockProduct: Replicache instance not ready.");
+      return;
+    }
+    console.log("handleRestockProduct: Calling updateProductStock mutator (restock)...");
     await rep.mutate.updateProductStock({ id: productId, stockChange: 1 });
+    console.log("handleRestockProduct: updateProductStock (restock) mutator called successfully.");
   };
+
+  // Improved loading state
+  if (isLoadingReplicache || !rep) {
+    return (
+      <div style={{ textAlign: "center", marginTop: "50px" }}>
+        <h2>Initializing POS terminal...</h2>
+        <p>Please wait while Replicache connects and syncs data.</p>
+        {clientId && <p>Client ID: <code>{clientId}</code></p>}
+      </div>
+    );
+  }
 
   return (
     <div
