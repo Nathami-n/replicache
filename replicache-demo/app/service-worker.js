@@ -75,7 +75,7 @@ self.addEventListener("fetch", (event) => {
   // This ensures Replicache can sync properly when online
   if (url.pathname.includes("/api/replicache/")) {
     console.log("Skipping cache for Replicache API:", url.pathname);
-    return; // Let it go to network
+    return; 
   }
 
   // Skip other API calls that shouldn't be cached

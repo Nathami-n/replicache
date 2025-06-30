@@ -1,20 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Replicache,
-  type ReadTransaction,
   type WriteTransaction,
 } from "replicache";
 import { useSubscribe } from "replicache-react";
 import { nanoid } from "nanoid";
-import type { MetaFunction } from "react-router";
-
-export const meta: MetaFunction = () => [
-  { title: "Remix Replicache POS Demo" },
-  {
-    name: "description",
-    content: "A single-client POS with offline capabilities!",
-  },
-];
 
 const CLIENT_ID_KEY = "replicache-pos-client-id";
 
@@ -26,90 +16,99 @@ type Product = {
   version: number;
 };
 
-export default function Home() {
+export default function DebugReplicache() {
   const [clientId, setClientId] = useState<string | null>(null);
-  const [isLoadingReplicache, setIsLoadingReplicache] = useState(true)
+  const [isLoadingReplicache, setIsLoadingReplicache] = useState(true);
+  const [rep, setRep] = useState<Replicache | null>(null);
+  const [debugInfo, setDebugInfo] = useState<string[]>([]);
 
-  console.log("Client ID state:", clientId);
+  const addDebugLog = (message: string) => {
+    const timestamp = new Date().toLocaleTimeString();
+    setDebugInfo((prev) => [...prev, `[${timestamp}] ${message}`]);
+    console.log(message);
+  };
 
   useEffect(() => {
     let id = localStorage.getItem(CLIENT_ID_KEY);
     if (!id) {
       id = nanoid();
       localStorage.setItem(CLIENT_ID_KEY, id);
-      console.log("Generated new client ID:", id);
+      addDebugLog(`Generated new client ID: ${id}`);
     } else {
-      console.log("Found existing client ID:", id);
+      addDebugLog(`Found existing client ID: ${id}`);
     }
     setClientId(id);
-    // Set loading to false only after clientId is set, allowing Replicache to initialize
     setIsLoadingReplicache(false);
   }, []);
 
-  const rep = useMemo(
-    () => {
-      if (!clientId) {
-        console.log("Replicache not initializing yet, clientId is null.");
-        return undefined;
-      }
-      console.log("Initializing Replicache with name:", clientId);
-      const replicacheInstance = new Replicache({
-        name: clientId,
-        pullURL: "/api/replicache/pull",
-        pushURL: "/api/replicache/push",
-        mutators: {
-          async createProduct(
-            tx: WriteTransaction,
-            { id, name, price, stock, version }
-          ) {
-            console.log("Mutator: createProduct called with:", { id, name, price, stock, version });
-            await tx.set(`product/${id}`, {
-              id,
-              name,
-              price,
-              stock,
-              version,
-            });
-            console.log(`Mutator: Product ${name} set in Replicache local state.`);
-          },
-          async updateProductStock(
-            tx: WriteTransaction,
-            { id, stockChange }
-          ) {
-            console.log("Mutator: updateProductStock called with:", { id, stockChange });
-            const product = await tx.get(`product/${id}`);
-            if (product) {
-              const newStock = (product.stock || 0) + stockChange;
-              const newVersion = (product.version || 1) + 1;
-              await tx.set(`product/${id}`, {
-                ...product,
-                stock: newStock,
-                version: newVersion,
-              });
-              console.log(`Mutator: Product ${product.name} stock updated to ${newStock} (v${newVersion})`);
-            } else {
-              console.warn(`Mutator: Product with ID ${id} not found for stock update.`);
-            }
-          },
+  useEffect(() => {
+    if (!clientId || isLoadingReplicache) return;
+
+    addDebugLog(`Initializing Replicache with name: ${clientId}`);
+
+    const replicacheInstance = new Replicache({
+      name: clientId,
+      pullURL: "/api/replicache/pull",
+      pushURL: "/api/replicache/push",
+      mutators: {
+        async createProduct(tx: WriteTransaction, { id, name, price, stock, version }) {
+          addDebugLog(`Mutator: createProduct called for ${name}`);
+          await tx.set(`product/${id}`, { id, name, price, stock, version });
         },
-        licenseKey: "test",
-      });
+        async updateProductStock(tx: WriteTransaction, { id, stockChange }) {
+          const product = await tx.get(`product/${id}`);
+          if (!product) {
+            addDebugLog(`Product not found for ID ${id}`);
+            return;
+          }
+          const newStock = product.stock + stockChange;
+          const newVersion = (product.version || 1) + 1;
+          await tx.set(`product/${id}`, {
+            ...product,
+            stock: newStock,
+            version: newVersion,
+          });
+          addDebugLog(`Updated stock for ${product.name} to ${newStock}`);
+        },
+      },
+      licenseKey: "test",
+    });
 
+    replicacheInstance.onSync = (syncing) => {
+      addDebugLog(`Replicache is ${syncing ? "SYNCING" : "IDLE"}`);
+    };
 
-      return replicacheInstance;
-    },
-    [clientId, isLoadingReplicache] 
-  );
+    const originalPull = replicacheInstance.pull.bind(replicacheInstance);
+    replicacheInstance.pull = async () => {
+      addDebugLog("Manual pull triggered...");
+      try {
+        const result = await originalPull();
+        addDebugLog("Pull success.");
+        return result;
+      } catch (err) {
+        addDebugLog(`Pull failed: ${err.message}`);
+        throw err;
+      }
+    };
+
+    setRep(replicacheInstance);
+
+    return () => {
+      replicacheInstance.close();
+      setRep(null);
+    };
+  }, [clientId, isLoadingReplicache]);
 
   const products = useSubscribe(
     rep,
     async (tx) => {
-      console.log("useSubscribe: Fetching products from Replicache local state...");
+      addDebugLog("useSubscribe: Fetching products...");
       const list: Product[] = [];
-      for await (const [, value] of tx.scan({ prefix: "product/" }).entries()) {
+      for await (const [key, value] of tx.scan({ prefix: "product/" }).entries()) {
+        addDebugLog(`Found product: ${key}`);
         list.push(value as Product);
       }
-      console.log("useSubscribe: Found products in local state:", list.length);
+      addDebugLog(`Total products: ${list.length}`);
       return list.sort((a, b) => a.name.localeCompare(b.name));
     },
     [rep]
@@ -119,19 +118,16 @@ export default function Home() {
   const [newProductPrice, setNewProductPrice] = useState("");
   const [newProductStock, setNewProductStock] = useState("");
 
-  const handleAddProduct = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleAddProduct = async () => {
     if (!rep) {
-      console.warn("handleAddProduct: Replicache instance not ready.");
+      addDebugLog("Replicache not ready.");
       return;
     }
     if (!newProductName || !newProductPrice || !newProductStock) {
-      // Replaced alert with console.error for better debugging in Canvas
-      console.error("Please fill all fields for the new product.");
+      addDebugLog("Missing product fields.");
       return;
     }
     const id = nanoid();
-    console.log("handleAddProduct: Calling createProduct mutator...");
     await rep.mutate.createProduct({
       id,
       name: newProductName,
@@ -142,185 +138,113 @@ export default function Home() {
     setNewProductName("");
     setNewProductPrice("");
     setNewProductStock("");
-    console.log("handleAddProduct: createProduct mutator called successfully.");
   };
 
-  const handleSellProduct = async (productId: string, currentStock: number) => {
-    if (!rep) {
-      console.warn("handleSellProduct: Replicache instance not ready.");
-      return;
-    }
-    if (currentStock <= 0) {
-      console.warn("Cannot sell, stock is zero!");
-      return;
-    }
-    console.log("handleSellProduct: Calling updateProductStock mutator (sell)...");
-    await rep.mutate.updateProductStock({ id: productId, stockChange: -1 });
-    console.log("handleSellProduct: updateProductStock (sell) mutator called successfully.");
+  const handleSellProduct = async (id: string, currentStock: number) => {
+    if (!rep || currentStock <= 0) return;
+    await rep.mutate.updateProductStock({ id, stockChange: -1 });
   };
 
-  const handleRestockProduct = async (productId: string) => {
-    if (!rep) {
-      console.warn("handleRestockProduct: Replicache instance not ready.");
-      return;
-    }
-    console.log("handleRestockProduct: Calling updateProductStock mutator (restock)...");
-    await rep.mutate.updateProductStock({ id: productId, stockChange: 1 });
-    console.log("handleRestockProduct: updateProductStock (restock) mutator called successfully.");
+  const handleRestockProduct = async (id: string) => {
+    if (!rep) return;
+    await rep.mutate.updateProductStock({ id, stockChange: 1 });
   };
 
-  // Improved loading state
+  const handleForcePull = async () => {
+    if (!rep) return;
+    await rep.pull();
+  };
+
+  const handleClearClientData = () => {
+    localStorage.removeItem(CLIENT_ID_KEY);
+    addDebugLog("Cleared client ID. Reload to reinitialize.");
+  };
+
+  const handleTestPullEndpoint = async () => {
+    try {
+      const response = await fetch("/api/replicache/pull", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          clientGroupID: clientId,
+          cookie: null,
+          lastMutationID: 0,
+        }),
+      });
+      const data = await response.json();
+      addDebugLog(`Pull response: ${JSON.stringify(data, null, 2)}`);
+    } catch (err) {
+      addDebugLog(`Test pull failed: ${err.message}`);
+    }
+  };
+
   if (isLoadingReplicache || !rep) {
     return (
-      <div style={{ textAlign: "center", marginTop: "50px" }}>
+      <div style={{ padding: "20px", fontFamily: "monospace" }}>
         <h2>Initializing POS terminal...</h2>
         <p>Please wait while Replicache connects and syncs data.</p>
-        {clientId && <p>Client ID: <code>{clientId}</code></p>}
+        {clientId && (
+          <p>
+            Client ID: <code>{clientId}</code>
+          </p>
+        )}
       </div>
     );
   }
 
   return (
-    <div
-      style={{
-        fontFamily: "system-ui, sans-serif",
-        lineHeight: "1.8",
-        maxWidth: "800px",
-        margin: "20px auto",
-        padding: "20px",
-        border: "1px solid #eee",
-        borderRadius: "8px",
-        boxShadow: "0 2px 4px rgba(0,0,0,0.1)",
-      }}
-    >
-      <h1 style={{ textAlign: "center", color: "#333" }}>
-        Remix Replicache POS Demo
-      </h1>
-      <p style={{ textAlign: "center", color: "#666" }}>
-        Client ID: <code>{clientId ?? "Loading..."}</code> (This identifies your
-        POS terminal to the server)
+    <div style={{ padding: "20px", fontFamily: "system-ui, sans-serif" }}>
+      <h1>Debug Replicache POS Demo</h1>
+      <p>
+        Client ID: <code>{clientId}</code>
       </p>
 
-      <hr style={{ margin: "20px 0" }} />
+      <div style={{ backgroundColor: "#f5f5f5", padding: "15px", borderRadius: "5px", marginBottom: "20px" }}>
+        <h3>Debug Controls</h3>
+        <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+          <button onClick={handleForcePull} style={{ padding: "8px 12px", backgroundColor: "#007bff", color: "white", border: "none", borderRadius: "4px" }}>Force Pull</button>
+          <button onClick={handleTestPullEndpoint} style={{ padding: "8px 12px", backgroundColor: "#28a745", color: "white", border: "none", borderRadius: "4px" }}>Test Pull Endpoint</button>
+          <button onClick={handleClearClientData} style={{ padding: "8px 12px", backgroundColor: "#dc3545", color: "white", border: "none", borderRadius: "4px" }}>Clear Client Data</button>
+        </div>
+      </div>
 
-      <h2>Add New Product</h2>
-      <form
-        onSubmit={handleAddProduct}
-        style={{
-          display: "grid",
-          gap: "10px",
-          padding: "15px",
-          border: "1px dashed #ccc",
-          borderRadius: "5px",
-          marginBottom: "30px",
-        }}
-      >
-        <input
-          type="text"
-          placeholder="Product Name"
-          value={newProductName}
-          onChange={(e) => setNewProductName(e.target.value)}
-          required
-          style={{
-            padding: "8px",
-            borderRadius: "4px",
-            border: "1px solid #ddd",
-          }}
-        />
-        <input
-          type="number"
-          step="0.01"
-          placeholder="Price (e.g., 19.99)"
-          value={newProductPrice}
-          onChange={(e) => setNewProductPrice(e.target.value)}
-          required
-          style={{
-            padding: "8px",
-            borderRadius: "4px",
-            border: "1px solid #ddd",
-          }}
-        />
-        <input
-          type="number"
-          placeholder="Stock"
-          value={newProductStock}
-          onChange={(e) => setNewProductStock(e.target.value)}
-          required
-          style={{
-            padding: "8px",
-            borderRadius: "4px",
-            border: "1px solid #ddd",
-          }}
-        />
-        <button
-          type="submit"
-          style={{
-            padding: "10px 15px",
-            backgroundColor: "#4CAF50",
-            color: "white",
-            border: "none",
-            borderRadius: "4px",
-            cursor: "pointer",
-          }}
-        >
-          Add Product
-        </button>
-      </form>
+      <div style={{ marginBottom: "30px" }}>
+        <h2>Add New Product</h2>
+        <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+          <input type="text" placeholder="Product Name" value={newProductName} onChange={(e) => setNewProductName(e.target.value)} style={{ padding: "8px", borderRadius: "4px", border: "1px solid #ddd" }} />
+          <input type="number" step="0.01" placeholder="Price" value={newProductPrice} onChange={(e) => setNewProductPrice(e.target.value)} style={{ padding: "8px", borderRadius: "4px", border: "1px solid #ddd" }} />
+          <input type="number" placeholder="Stock" value={newProductStock} onChange={(e) => setNewProductStock(e.target.value)} style={{ padding: "8px", borderRadius: "4px", border: "1px solid #ddd" }} />
+          <button onClick={handleAddProduct} style={{ padding: "8px 15px", backgroundColor: "#4CAF50", color: "white", border: "none", borderRadius: "4px" }}>Add Product</button>
+        </div>
+      </div>
 
-      <h2>Current Products ({products?.length ?? 0})</h2>
-      {products?.length === 0 ? (
-        <p>No products added yet. Add one above!</p>
-      ) : (
-        <ul style={{ listStyle: "none", padding: 0 }}>
-          {products?.map((p) => (
-            <li
-              key={p.id}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: "15px",
-                padding: "10px",
-                borderBottom: "1px solid #eee",
-              }}
-            >
-              <strong style={{ flex: 2 }}>{p.name}</strong>
-              <span style={{ flex: 1 }}>${p.price.toFixed(2)}</span>
-              <span style={{ flex: 1 }}>
-                Stock: {p.stock} (v{p.version})
-              </span>
-              <div style={{ flex: 1, display: "flex", gap: "5px" }}>
-                <button
-                  onClick={() => handleSellProduct(p.id, p.stock)}
-                  disabled={p.stock <= 0}
-                  style={{
-                    padding: "8px 12px",
-                    backgroundColor: "#f44336",
-                    color: "white",
-                    border: "none",
-                    borderRadius: "4px",
-                    cursor: "pointer",
-                  }}
-                >
-                  Sell (-1)
-                </button>
-                <button
-                  onClick={() => handleRestockProduct(p.id)}
-                  style={{
-                    padding: "8px 12px",
-                    backgroundColor: "#2196F3",
-                    color: "white",
-                    border: "none",
-                    borderRadius: "4px",
-                    cursor: "pointer",
-                  }}
-                >
-                  Restock (+1)
-                </button>
+      <div style={{ marginBottom: "30px" }}>
+        <h2>Current Products ({products?.length ?? 0})</h2>
+        {products?.length === 0 ? (
+          <p>No products found. This might indicate a sync issue.</p>
+        ) : (
+          <div>
+            {products?.map((p) => (
+              <div key={p.id} style={{ display: "flex", alignItems: "center", gap: "15px", padding: "10px", borderBottom: "1px solid #eee" }}>
+                <strong style={{ flex: 2 }}>{p.name}</strong>
+                <span style={{ flex: 1 }}>${p.price.toFixed(2)}</span>
+                <span style={{ flex: 1 }}>Stock: {p.stock} (v{p.version})</span>
+                <button onClick={() => handleSellProduct(p.id, p.stock)} disabled={p.stock <= 0} style={{ padding: "5px 10px", backgroundColor: "#f44336", color: "white", border: "none", borderRadius: "4px" }}>Sell</button>
+                <button onClick={() => handleRestockProduct(p.id)} style={{ padding: "5px 10px", backgroundColor: "#2196F3", color: "white", border: "none", borderRadius: "4px" }}>Restock</button>
               </div>
-            </li>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div>
+        <h3>Debug Log</h3>
+        <div style={{ backgroundColor: "#000", color: "#00ff00", padding: "15px", borderRadius: "5px", height: "300px", overflow: "auto", fontFamily: "monospace", fontSize: "12px" }}>
+          {debugInfo.map((log, i) => (
+            <div key={i}>{log}</div>
           ))}
-        </ul>
-      )}
+        </div>
+      </div>
     </div>
   );
 }
