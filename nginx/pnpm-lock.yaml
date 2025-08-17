@@ -61,6 +61,49 @@ importers:
         specifier: ^3.1.10
         version: 3.1.10
 
+  apps/app2:
+    dependencies:
+      body-parser:
+        specifier: ^2.2.0
+        version: 2.2.0
+      express:
+        specifier: ^5.1.0
+        version: 5.1.0
+      morgan:
+        specifier: ^1.10.1
+        version: 1.10.1
+      tsx:
+        specifier: ^4.20.4
+        version: 4.20.4
+      typescript:
+        specifier: ^5.9.2
+        version: 5.9.2
+    devDependencies:
+      '@repo/typescript-config':
+        specifier: workspace:*
+        version: link:../../packages/typescript-config
+      '@types/body-parser':
+        specifier: ^1.19.6
+        version: 1.19.6
+      '@types/express':
+        specifier: ^5.0.3
+        version: 5.0.3
+      '@types/morgan':
+        specifier: ^1.9.10
+        version: 1.9.10
+      '@types/node':
+        specifier: ^22.15.3
+        version: 22.15.3
+      esbuild:
+        specifier: ^0.25.9
+        version: 0.25.9
+      esbuild-register:
+        specifier: ^3.6.0
+        version: 3.6.0(esbuild@0.25.9)
+      nodemon:
+        specifier: ^3.1.10
+        version: 3.1.10
+
   packages/eslint-config:
     devDependencies:
       '@eslint/js':
