@@ -9,6 +9,9 @@ import {
 
 import type { Route } from "./+types/root";
 import "./app.css";
+import { useEffect, useState } from "react";
+import { Replicache } from "replicache";
+import { ReplicacheProvider } from "./replicache/provider";
 
 export const links: Route.LinksFunction = () => [
   { rel: "preconnect", href: "https://fonts.googleapis.com" },
@@ -24,8 +27,8 @@ export const links: Route.LinksFunction = () => [
 
   {
     rel: "manifest",
-    href: "manifest.json"
-  }
+    href: "manifest.json",
+  },
 ];
 
 export function Layout({ children }: { children: React.ReactNode }) {
@@ -47,7 +50,11 @@ export function Layout({ children }: { children: React.ReactNode }) {
 }
 
 export default function App() {
-  return <Outlet />;
+  return (
+    <ReplicacheProvider>
+      <Outlet />
+    </ReplicacheProvider>
+  );
 }
 
 export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
