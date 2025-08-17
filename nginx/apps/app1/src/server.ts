@@ -10,7 +10,7 @@ export const createServer = (): Express => {
     .use(urlencoded({ extended: true }))
     .use(json())
     .get("/message/:name", (req, res) => {
-      res.status(200).json({ message: `Hello ${req.params.name}` });
+      res.status(200).json({ message: `Hello ${req.params.name} from app1` });
     })
     .get("/status", (_, res) => {
       return res.json({ ok: true });
